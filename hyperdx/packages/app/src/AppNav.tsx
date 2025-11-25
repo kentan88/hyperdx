@@ -867,7 +867,7 @@ export default function AppNav({ fixed = false }: { fixed?: boolean }) {
                 className="px-3 mb-2 mt-4"
               >
                 <OnboardingChecklist onAddDataClick={openInstallInstructions} />
-                <AppNavCloudBanner />
+                {/* <AppNavCloudBanner /> */}
               </div>
             </>
           )}

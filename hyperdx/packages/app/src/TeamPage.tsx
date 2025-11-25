@@ -1,0 +1,1350 @@
+import { Fragment, useCallback, useMemo, useState } from 'react';
+import Head from 'next/head';
+import { HTTPError } from 'ky';
+import { CopyToClipboard } from 'react-copy-to-clipboard';
+import { SubmitHandler, useForm } from 'react-hook-form';
+import { DEFAULT_METADATA_MAX_ROWS_TO_READ } from '@hyperdx/common-utils/dist/core/metadata';
+import { SourceKind, WebhookService } from '@hyperdx/common-utils/dist/types';
+import {
+  Badge,
+  Box,
+  Button,
+  Card,
+  Center,
+  Container,
+  Divider,
+  Flex,
+  Group,
+  InputLabel,
+  Loader,
+  Modal,
+  Stack,
+  Table,
+  Text,
+  TextInput,
+  Tooltip,
+} from '@mantine/core';
+import { useDisclosure } from '@mantine/hooks';
+import { notifications } from '@mantine/notifications';
+import { IconPencil } from '@tabler/icons-react';
+
+import { ConnectionForm } from '@/components/ConnectionForm';
+import SelectControlled from '@/components/SelectControlled';
+import { TableSourceForm } from '@/components/SourceForm';
+import { IS_LOCAL_MODE } from '@/config';
+
+import { PageHeader } from './components/PageHeader';
+import { WebhookForm } from './components/TeamSettings/WebhookForm';
+import api from './api';
+import { useConnections } from './connection';
+import { DEFAULT_QUERY_TIMEOUT, DEFAULT_SEARCH_ROW_LIMIT } from './defaults';
+import { withAppNav } from './layout';
+import { useSources } from './source';
+import type { Webhook } from './types';
+import { useConfirm } from './useConfirm';
+import { capitalizeFirstLetter } from './utils';
+
+function InviteTeamMemberForm({
+  isSubmitting,
+  onSubmit,
+}: {
+  isSubmitting?: boolean;
+  onSubmit: (arg0: { email: string }) => void;
+}) {
+  const [email, setEmail] = useState<string>('');
+
+  return (
+    <form
+      onSubmit={e => {
+        onSubmit({ email });
+        e.preventDefault();
+      }}
+    >
+      <Stack>
+        <TextInput
+          label="Email"
+          name="email"
+          type="email"
+          value={email}
+          onChange={e => setEmail(e.target.value)}
+          required
+          placeholder="you@company.com"
+          withAsterisk={false}
+        />
+        <div className="fs-8">
+          The invite link will automatically expire after 30 days.
+        </div>
+        <Button variant="light" type="submit" disabled={!email || isSubmitting}>
+          Send Invite
+        </Button>
+      </Stack>
+    </form>
+  );
+}
+
+function ConnectionsSection() {
+  const { data: connections } = useConnections();
+
+  const [editedConnectionId, setEditedConnectionId] = useState<string | null>(
+    null,
+  );
+  const [isCreatingConnection, setIsCreatingConnection] = useState(false);
+
+  return (
+    <Box id="connections">
+      <Text size="md">Connections</Text>
+      <Divider my="md" />
+      <Card variant="muted">
+        <Stack mb="md">
+          {connections?.map(c => (
+            <Box key={c.id}>
+              <Flex justify="space-between" align="flex-start">
+                <Stack gap="xs">
+                  <Text fw={500} size="lg">
+                    {c.name}
+                  </Text>
+                  <Text size="sm" c="dimmed">
+                    <b>Host:</b> {c.host}
+                  </Text>
+                  <Text size="sm" c="dimmed">
+                    <b>Username:</b> {c.username}
+                  </Text>
+                  <Text size="sm" c="dimmed">
+                    <b>Password:</b> [Configured]
+                  </Text>
+                </Stack>
+                {editedConnectionId !== c.id && (
+                  <Button
+                    variant="subtle"
+                    onClick={() => setEditedConnectionId(c.id)}
+                    size="sm"
+                  >
+                    <i className="bi bi-pencil-fill me-2" /> Edit
+                  </Button>
+                )}
+                {editedConnectionId === c.id && (
+                  <Button
+                    variant="subtle"
+                    onClick={() => setEditedConnectionId(null)}
+                    size="sm"
+                  >
+                    <i className="bi bi-x-lg me-2" /> Cancel
+                  </Button>
+                )}
+              </Flex>
+              {editedConnectionId === c.id && (
+                <ConnectionForm
+                  connection={c}
+                  isNew={false}
+                  onSave={() => {
+                    setEditedConnectionId(null);
+                  }}
+                  showCancelButton={false}
+                  showDeleteButton
+                />
+              )}
+              <Divider my="md" />
+            </Box>
+          ))}
+        </Stack>
+        {!isCreatingConnection &&
+          (IS_LOCAL_MODE ? (connections?.length ?? 0) < 1 : true) && (
+            <Button
+              variant="outline"
+              onClick={() => setIsCreatingConnection(true)}
+            >
+              Add Connection
+            </Button>
+          )}
+        {isCreatingConnection && (
+          <Stack gap="md">
+            <ConnectionForm
+              connection={{
+                id: 'new',
+                name: 'My New Connection',
+                host: 'http://localhost:8123',
+                username: 'default',
+                password: '',
+              }}
+              isNew={true}
+              onSave={() => setIsCreatingConnection(false)}
+              onClose={() => setIsCreatingConnection(false)}
+              showCancelButton
+            />
+          </Stack>
+        )}
+      </Card>
+    </Box>
+  );
+}
+
+function SourcesSection() {
+  const { data: connections } = useConnections();
+  const { data: sources } = useSources();
+
+  const [editedSourceId, setEditedSourceId] = useState<string | null>(null);
+  const [isCreatingSource, setIsCreatingSource] = useState(false);
+
+  return (
+    <Box id="sources">
+      <Text size="md">Sources</Text>
+      <Divider my="md" />
+      <Card variant="muted">
+        <Stack>
+          {sources?.map(s => (
+            <>
+              <Flex key={s.id} justify="space-between" align="center">
+                <div>
+                  <Text>{s.name}</Text>
+                  <Text size="xxs" c="dimmed" mt="xs">
+                    {capitalizeFirstLetter(s.kind)}
+                    <Text px="md" span>
+                      <span className="bi-hdd-stack me-1" />
+                      {connections?.find(c => c.id === s.connection)?.name}
+                    </Text>
+                    {s.from && (
+                      <>
+                        <span className="bi-database me-1" />
+                        {s.from.databaseName}
+                        {
+                          s.kind === SourceKind.Metric
+                            ? ''
+                            : '.' /** Metrics dont have table names */
+                        }
+                        {s.from.tableName}
+                      </>
+                    )}
+                  </Text>
+                </div>
+                {editedSourceId !== s.id && (
+                  <Button
+                    variant="subtle"
+                    onClick={() => setEditedSourceId(s.id)}
+                    size="sm"
+                  >
+                    <i className="bi bi-chevron-down" />
+                  </Button>
+                )}
+                {editedSourceId === s.id && (
+                  <Button
+                    variant="subtle"
+                    onClick={() => setEditedSourceId(null)}
+                    size="sm"
+                  >
+                    <i className="bi bi-chevron-up" />
+                  </Button>
+                )}
+              </Flex>
+              {editedSourceId === s.id && (
+                <TableSourceForm
+                  sourceId={s.id}
+                  onSave={() => setEditedSourceId(null)}
+                />
+              )}
+              <Divider />
+            </>
+          ))}
+          {!IS_LOCAL_MODE && isCreatingSource && (
+            <TableSourceForm
+              isNew
+              onCreate={() => {
+                setIsCreatingSource(false);
+              }}
+              onCancel={() => setIsCreatingSource(false)}
+            />
+          )}
+          {!IS_LOCAL_MODE && !isCreatingSource && (
+            <Button variant="default" onClick={() => setIsCreatingSource(true)}>
+              Add Source
+            </Button>
+          )}
+        </Stack>
+      </Card>
+    </Box>
+  );
+}
+
+function TeamMembersSection() {
+  const hasAdminAccess = true;
+
+  const { data: me, isLoading: isLoadingMe } = api.useMe();
+  const { data: team } = api.useTeam();
+  const {
+    data: members,
+    isLoading: isLoadingMembers,
+    refetch: refetchMembers,
+  } = api.useTeamMembers();
+
+  const {
+    data: invitations,
+    isLoading: isLoadingInvitations,
+    refetch: refetchInvitations,
+  } = api.useTeamInvitations();
+
+  const onSubmitTeamInviteForm = ({ email }: { email: string }) => {
+    sendTeamInviteAction(email);
+    setTeamInviteModalShow(false);
+  };
+
+  const [
+    deleteTeamMemberConfirmationModalData,
+    setDeleteTeamMemberConfirmationModalData,
+  ] = useState<{
+    mode: 'team' | 'teamInvite' | null;
+    id: string | null;
+    email: string | null;
+  }>({
+    mode: null,
+    id: null,
+    email: null,
+  });
+  const [teamInviteModalShow, setTeamInviteModalShow] = useState(false);
+
+  const saveTeamInvitation = api.useSaveTeamInvitation();
+  const deleteTeamMember = api.useDeleteTeamMember();
+  const deleteTeamInvitation = api.useDeleteTeamInvitation();
+
+  const sendTeamInviteAction = (email: string) => {
+    if (email) {
+      saveTeamInvitation.mutate(
+        { email },
+        {
+          onSuccess: resp => {
+            notifications.show({
+              color: 'green',
+              message:
+                'Click "Copy URL" and share the URL with your team member',
+            });
+            refetchInvitations();
+          },
+          onError: e => {
+            if (e instanceof HTTPError) {
+              e.response
+                .json()
+                .then(res => {
+                  notifications.show({
+                    color: 'red',
+                    message: res.message,
+                    autoClose: 5000,
+                  });
+                })
+                .catch(() => {
+                  notifications.show({
+                    color: 'red',
+                    message:
+                      'Something went wrong. Please contact HyperDX team.',
+
+                    autoClose: 5000,
+                  });
+                });
+            } else {
+              notifications.show({
+                color: 'red',
+                message: 'Something went wrong. Please contact HyperDX team.',
+                autoClose: 5000,
+              });
+            }
+          },
+        },
+      );
+    }
+  };
+
+  const onConfirmDeleteTeamMember = (id: string) => {
+    if (deleteTeamMemberConfirmationModalData.mode === 'team') {
+      deleteTeamMemberAction(id);
+    } else if (deleteTeamMemberConfirmationModalData.mode === 'teamInvite') {
+      deleteTeamInviteAction(id);
+    }
+    setDeleteTeamMemberConfirmationModalData({
+      mode: null,
+      id: null,
+      email: null,
+    });
+  };
+
+  const deleteTeamInviteAction = (id: string) => {
+    if (id) {
+      deleteTeamInvitation.mutate(
+        { id: encodeURIComponent(id) },
+        {
+          onSuccess: resp => {
+            notifications.show({
+              color: 'green',
+              message: 'Deleted team invite',
+            });
+            refetchInvitations();
+          },
+          onError: e => {
+            if (e instanceof HTTPError) {
+              e.response
+                .json()
+                .then(res => {
+                  notifications.show({
+                    color: 'red',
+                    message: res.message,
+                    autoClose: 5000,
+                  });
+                })
+                .catch(() => {
+                  notifications.show({
+                    color: 'red',
+                    message:
+                      'Something went wrong. Please contact HyperDX team.',
+
+                    autoClose: 5000,
+                  });
+                });
+            } else {
+              notifications.show({
+                color: 'red',
+                message: 'Something went wrong. Please contact HyperDX team.',
+                autoClose: 5000,
+              });
+            }
+          },
+        },
+      );
+    }
+  };
+  const deleteTeamMemberAction = (id: string) => {
+    if (id) {
+      deleteTeamMember.mutate(
+        { userId: encodeURIComponent(id) },
+        {
+          onSuccess: resp => {
+            notifications.show({
+              color: 'green',
+              message: 'Deleted team member',
+            });
+            refetchMembers();
+          },
+          onError: e => {
+            if (e instanceof HTTPError) {
+              e.response
+                .json()
+                .then(res => {
+                  notifications.show({
+                    color: 'red',
+                    message: res.message,
+                    autoClose: 5000,
+                  });
+                })
+                .catch(() => {
+                  notifications.show({
+                    color: 'red',
+                    message:
+                      'Something went wrong. Please contact HyperDX team.',
+                    autoClose: 5000,
+                  });
+                });
+            } else {
+              notifications.show({
+                color: 'red',
+                message: 'Something went wrong. Please contact HyperDX team.',
+                autoClose: 5000,
+              });
+            }
+          },
+        },
+      );
+    }
+  };
+
+  return (
+    <Box id="team_members">
+      <Text size="md">Team</Text>
+      <Divider my="md" />
+
+      <Card>
+        <Card.Section withBorder py="sm" px="lg">
+          <Group align="center" justify="space-between">
+            <div className="fs-7">Team Members</div>
+            <Button
+              variant="light"
+              leftSection={<i className="bi bi-person-plus-fill" />}
+              onClick={() => setTeamInviteModalShow(true)}
+            >
+              Invite Team Member
+            </Button>
+          </Group>
+        </Card.Section>
+        <Card.Section>
+          <Table horizontalSpacing="lg" verticalSpacing="xs">
+            <Table.Tbody>
+              {!isLoadingMembers &&
+                Array.isArray(members?.data) &&
+                members?.data.map((member: any) => (
+                  <Table.Tr key={member.email}>
+                    <Table.Td>
+                      <div>
+                        {member.isCurrentUser && (
+                          <Badge variant="light" mr="xs" tt="none">
+                            You
+                          </Badge>
+                        )}
+                        <span className="text-white fw-bold fs-7">
+                          {member.name}
+                        </span>
+                      </div>
+                      <Group mt={4} fz="xs">
+                        <div>{member.email}</div>
+                        {member.hasPasswordAuth && (
+                          <div>
+                            <i className="bi bi-lock-fill" /> Password Auth
+                          </div>
+                        )}
+                      </Group>
+                    </Table.Td>
+                    <Table.Td>
+                      {team.shouldEnforceRBAC && !member.groupName && (
+                        <Badge
+                          variant="light"
+                          color="red"
+                          fw="normal"
+                          tt="none"
+                        >
+                          Not Assigned to Group
+                        </Badge>
+                      )}
+                      {member.groupName && (
+                        <Badge
+                          variant="light"
+                          color="green"
+                          fw="normal"
+                          tt="none"
+                        >
+                          {member.groupName}
+                        </Badge>
+                      )}
+                    </Table.Td>
+                    <Table.Td style={{ textAlign: 'right' }}>
+                      {!member.isCurrentUser && hasAdminAccess && (
+                        <Group justify="flex-end" gap="8">
+                          <Button
+                            size="compact-sm"
+                            variant="light"
+                            color="red"
+                            onClick={() =>
+                              setDeleteTeamMemberConfirmationModalData({
+                                mode: 'team',
+                                id: member._id,
+                                email: member.email,
+                              })
+                            }
+                          >
+                            Remove
+                          </Button>
+                        </Group>
+                      )}
+                    </Table.Td>
+                  </Table.Tr>
+                ))}
+              {!isLoadingInvitations &&
+                Array.isArray(invitations.data) &&
+                invitations.data.map((invitation: any) => (
+                  <Table.Tr key={invitation.email} className="mt-2">
+                    <Table.Td>
+                      <span className="text-white fw-bold fs-7">
+                        {invitation.email}
+                      </span>
+                    </Table.Td>
+                    <Table.Td>
+                      <Badge variant="dot" color="gray" fw="normal" tt="none">
+                        Pending Invite
+                      </Badge>
+                      <CopyToClipboard text={invitation.url}>
+                        <Button size="compact-xs" variant="default" ml="xs">
+                          📋 Copy URL
+                        </Button>
+                      </CopyToClipboard>
+                    </Table.Td>
+                    <Table.Td style={{ textAlign: 'right' }}>
+                      {hasAdminAccess && (
+                        <Group justify="flex-end" gap="8">
+                          <Button
+                            size="compact-sm"
+                            variant="light"
+                            color="red"
+                            onClick={() =>
+                              setDeleteTeamMemberConfirmationModalData({
+                                mode: 'teamInvite',
+                                id: invitation._id,
+                                email: invitation.email,
+                              })
+                            }
+                          >
+                            Delete
+                          </Button>
+                        </Group>
+                      )}
+                    </Table.Td>
+                  </Table.Tr>
+                ))}
+            </Table.Tbody>
+          </Table>
+        </Card.Section>
+      </Card>
+
+      <Modal
+        centered
+        onClose={() => setTeamInviteModalShow(false)}
+        opened={teamInviteModalShow}
+        title="Invite Team Member"
+      >
+        <InviteTeamMemberForm
+          onSubmit={onSubmitTeamInviteForm}
+          isSubmitting={saveTeamInvitation.isPending}
+        />
+      </Modal>
+
+      <Modal
+        centered
+        onClose={() =>
+          setDeleteTeamMemberConfirmationModalData({
+            mode: null,
+            id: null,
+            email: null,
+          })
+        }
+        opened={deleteTeamMemberConfirmationModalData.id != null}
+        size="lg"
+        title="Delete Team Member"
+      >
+        <Stack>
+          <Text>
+            Deleting this team member (
+            {deleteTeamMemberConfirmationModalData.email}) will revoke their
+            access to the team&apos;s resources and services. This action is not
+            reversible.
+          </Text>
+          <Group justify="flex-end" gap="xs">
+            <Button
+              variant="default"
+              onClick={() =>
+                setDeleteTeamMemberConfirmationModalData({
+                  mode: null,
+                  id: null,
+                  email: null,
+                })
+              }
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="outline"
+              color="red"
+              onClick={() =>
+                deleteTeamMemberConfirmationModalData.id &&
+                onConfirmDeleteTeamMember(
+                  deleteTeamMemberConfirmationModalData.id,
+                )
+              }
+            >
+              Confirm
+            </Button>
+          </Group>
+        </Stack>
+      </Modal>
+    </Box>
+  );
+}
+
+function DeleteWebhookButton({
+  webhookId,
+  webhookName,
+  onSuccess,
+}: {
+  webhookId: string;
+  webhookName: string;
+  onSuccess: VoidFunction;
+}) {
+  const confirm = useConfirm();
+  const deleteWebhook = api.useDeleteWebhook();
+
+  const handleDelete = async () => {
+    if (
+      await confirm(
+        `Are you sure you want to delete ${webhookName} webhook?`,
+        'Delete',
+      )
+    ) {
+      try {
+        await deleteWebhook.mutateAsync({ id: webhookId });
+        notifications.show({
+          color: 'green',
+          message: 'Webhook deleted successfully',
+        });
+        onSuccess();
+      } catch (e) {
+        console.error(e);
+        const message =
+          (e instanceof HTTPError
+            ? (await e.response.json())?.message
+            : null) || 'Something went wrong. Please contact HyperDX team.';
+        notifications.show({
+          message,
+          color: 'red',
+          autoClose: 5000,
+        });
+      }
+    }
+  };
+
+  return (
+    <Button
+      color="red"
+      size="compact-xs"
+      variant="outline"
+      onClick={handleDelete}
+      loading={deleteWebhook.isPending}
+    >
+      Delete
+    </Button>
+  );
+}
+
+function IntegrationsSection() {
+  const { data: webhookData, refetch: refetchWebhooks } = api.useWebhooks([
+    WebhookService.Slack,
+    WebhookService.Generic,
+    WebhookService.IncidentIO,
+  ]);
+
+  const allWebhooks = useMemo<Webhook[]>(() => {
+    return Array.isArray(webhookData?.data) ? webhookData.data : [];
+  }, [webhookData]);
+
+  const [editedWebhookId, setEditedWebhookId] = useState<string | null>(null);
+  const [
+    isAddWebhookModalOpen,
+    { open: openWebhookModal, close: closeWebhookModal },
+  ] = useDisclosure();
+
+  return (
+    <Box id="integrations">
+      <Text size="md">Integrations</Text>
+      <Divider my="md" />
+      <Card variant="muted">
+        <Text mb="xs">Webhooks</Text>
+
+        <Stack>
+          {allWebhooks.map(webhook => (
+            <Fragment key={webhook._id}>
+              <Group justify="space-between" align="flex-start">
+                <Stack gap={0}>
+                  <Text size="sm">
+                    {webhook.name} ({webhook.service})
+                  </Text>
+                  <Text size="xs" opacity={0.7}>
+                    {webhook.url}
+                  </Text>
+                  {webhook.description && (
+                    <Text size="xxs" opacity={0.7}>
+                      {webhook.description}
+                    </Text>
+                  )}
+                </Stack>
+                <Group gap="xs">
+                  {editedWebhookId !== webhook._id && (
+                    <>
+                      <Button
+                        variant="subtle"
+                        onClick={() => setEditedWebhookId(webhook._id)}
+                        size="compact-xs"
+                        leftSection={<IconPencil size={14} />}
+                      >
+                        Edit
+                      </Button>
+                      <DeleteWebhookButton
+                        webhookId={webhook._id}
+                        webhookName={webhook.name}
+                        onSuccess={refetchWebhooks}
+                      />
+                    </>
+                  )}
+                  {editedWebhookId === webhook._id && (
+                    <Button
+                      variant="subtle"
+                      onClick={() => setEditedWebhookId(null)}
+                      size="compact-xs"
+                    >
+                      <i className="bi bi-x-lg me-2" /> Cancel
+                    </Button>
+                  )}
+                </Group>
+              </Group>
+              {editedWebhookId === webhook._id && (
+                <WebhookForm
+                  webhook={webhook}
+                  onClose={() => setEditedWebhookId(null)}
+                  onSuccess={() => {
+                    setEditedWebhookId(null);
+                    refetchWebhooks();
+                  }}
+                />
+              )}
+              <Divider />
+            </Fragment>
+          ))}
+        </Stack>
+
+        {!isAddWebhookModalOpen ? (
+          <Button variant="outline" onClick={openWebhookModal}>
+            Add Webhook
+          </Button>
+        ) : (
+          <WebhookForm
+            onClose={closeWebhookModal}
+            onSuccess={() => {
+              refetchWebhooks();
+              closeWebhookModal();
+            }}
+          />
+        )}
+      </Card>
+    </Box>
+  );
+}
+
+function TeamNameSection() {
+  const { data: team, isLoading, refetch: refetchTeam } = api.useTeam();
+  const setTeamName = api.useSetTeamName();
+  const hasAdminAccess = true;
+  const [isEditingTeamName, setIsEditingTeamName] = useState(false);
+  const form = useForm<{ name: string }>({
+    defaultValues: {
+      name: team.name,
+    },
+  });
+
+  const onSubmit: SubmitHandler<{ name: string }> = useCallback(
+    async values => {
+      setTeamName.mutate(
+        { name: values.name },
+        {
+          onError: e => {
+            notifications.show({
+              color: 'red',
+              message: 'Failed to update team name',
+            });
+          },
+          onSuccess: () => {
+            notifications.show({
+              color: 'green',
+              message: 'Updated team name',
+            });
+            refetchTeam();
+            setIsEditingTeamName(false);
+          },
+        },
+      );
+    },
+    [refetchTeam, setTeamName, team?.name],
+  );
+  return (
+    <Box id="team_name">
+      <Text size="md">Team Name</Text>
+      <Divider my="md" />
+      <Card variant="muted">
+        {isEditingTeamName ? (
+          <form onSubmit={form.handleSubmit(onSubmit)}>
+            <Group gap="xs">
+              <TextInput
+                size="xs"
+                placeholder="My Team"
+                required
+                error={form.formState.errors.name?.message}
+                {...form.register('name', { required: true })}
+                miw={300}
+                min={1}
+                max={100}
+                autoFocus
+                onKeyDown={e => {
+                  if (e.key === 'Escape') {
+                    setIsEditingTeamName(false);
+                  }
+                }}
+              />
+              <Button
+                type="submit"
+                size="xs"
+                variant="light"
+                color="green"
+                loading={setTeamName.isPending}
+              >
+                Save
+              </Button>
+              <Button
+                type="button"
+                size="xs"
+                variant="default"
+                disabled={setTeamName.isPending}
+                onClick={() => setIsEditingTeamName(false)}
+              >
+                Cancel
+              </Button>
+            </Group>
+          </form>
+        ) : (
+          <Group gap="lg">
+            <div className="fs-7">{team.name}</div>
+            {hasAdminAccess && (
+              <Button
+                size="xs"
+                variant="default"
+                leftSection={<i className="bi bi-pencil " />}
+                onClick={() => {
+                  setIsEditingTeamName(true);
+                }}
+              >
+                Change
+              </Button>
+            )}
+          </Group>
+        )}
+      </Card>
+    </Box>
+  );
+}
+
+type ClickhouseSettingType = 'number' | 'boolean';
+
+interface ClickhouseSettingFormProps {
+  settingKey:
+    | 'searchRowLimit'
+    | 'queryTimeout'
+    | 'metadataMaxRowsToRead'
+    | 'fieldMetadataDisabled';
+  label: string;
+  tooltip?: string;
+  type: ClickhouseSettingType;
+  defaultValue?: number | string;
+  placeholder?: string;
+  min?: number;
+  max?: number;
+  displayValue?: (value: any, defaultValue?: any) => string;
+  options?: string[]; // For boolean settings displayed as select
+}
+
+function ClickhouseSettingForm({
+  settingKey,
+  label,
+  tooltip,
+  type,
+  defaultValue,
+  placeholder,
+  min,
+  max,
+  displayValue,
+  options,
+}: ClickhouseSettingFormProps) {
+  const { data: me, refetch: refetchMe } = api.useMe();
+  const updateClickhouseSettings = api.useUpdateClickhouseSettings();
+  const hasAdminAccess = true;
+  const [isEditing, setIsEditing] = useState(false);
+  const currentValue = me?.team[settingKey];
+
+  const form = useForm<{ value: any }>({
+    defaultValues: {
+      value:
+        type === 'boolean'
+          ? currentValue != null
+            ? currentValue
+              ? 'Disabled'
+              : 'Enabled'
+            : 'Enabled'
+          : (currentValue ?? defaultValue ?? ''),
+    },
+  });
+
+  const onSubmit: SubmitHandler<{ value: any }> = useCallback(
+    async values => {
+      try {
+        const settingValue =
+          type === 'boolean'
+            ? values.value === 'Disabled'
+            : Number(values.value);
+
+        updateClickhouseSettings.mutate(
+          { [settingKey]: settingValue },
+          {
+            onError: e => {
+              notifications.show({
+                color: 'red',
+                message: `Failed to update ${label}`,
+              });
+            },
+            onSuccess: () => {
+              notifications.show({
+                color: 'green',
+                message: `Updated ${label}`,
+              });
+              refetchMe();
+              setIsEditing(false);
+            },
+          },
+        );
+      } catch (e) {
+        notifications.show({
+          color: 'red',
+          message: e.message,
+        });
+      }
+    },
+    [refetchMe, updateClickhouseSettings, settingKey, label, type],
+  );
+
+  return (
+    <Stack gap="xs" mb="md">
+      <Group gap="xs">
+        <InputLabel size="md">{label}</InputLabel>
+        {tooltip && (
+          <Tooltip label={tooltip}>
+            <Text size="sm" style={{ cursor: 'help' }}>
+              <i className="bi bi-question-circle" />
+            </Text>
+          </Tooltip>
+        )}
+      </Group>
+      {isEditing && hasAdminAccess ? (
+        <form onSubmit={form.handleSubmit(onSubmit)}>
+          <Group>
+            {type === 'boolean' && options ? (
+              <SelectControlled
+                control={form.control}
+                name="value"
+                value={form.watch('value')}
+                data={options}
+                size="xs"
+                placeholder="Please select"
+                withAsterisk
+                miw={300}
+                readOnly={!isEditing}
+                autoFocus
+                onKeyDown={e => {
+                  if (e.key === 'Escape') {
+                    setIsEditing(false);
+                  }
+                }}
+              />
+            ) : (
+              <TextInput
+                size="xs"
+                type="number"
+                placeholder={
+                  placeholder || currentValue?.toString() || `Enter value`
+                }
+                required
+                readOnly={!isEditing}
+                error={
+                  form.formState.errors.value?.message as string | undefined
+                }
+                {...form.register('value', {
+                  required: true,
+                })}
+                miw={300}
+                min={min}
+                max={max}
+                autoFocus
+                onKeyDown={e => {
+                  if (e.key === 'Escape') {
+                    setIsEditing(false);
+                  }
+                }}
+              />
+            )}
+            <Button
+              type="submit"
+              size="xs"
+              variant="light"
+              color="green"
+              loading={updateClickhouseSettings.isPending}
+            >
+              Save
+            </Button>
+            <Button
+              type="button"
+              size="xs"
+              variant="default"
+              disabled={updateClickhouseSettings.isPending}
+              onClick={() => {
+                setIsEditing(false);
+              }}
+            >
+              Cancel
+            </Button>
+          </Group>
+        </form>
+      ) : (
+        <Group>
+          <Text className="text-white">
+            {displayValue
+              ? displayValue(currentValue, defaultValue)
+              : currentValue?.toString() || 'Not set'}
+          </Text>
+          {hasAdminAccess && (
+            <Button
+              size="xs"
+              variant="default"
+              leftSection={<i className="bi bi-pencil " />}
+              onClick={() => setIsEditing(true)}
+            >
+              Change
+            </Button>
+          )}
+        </Group>
+      )}
+    </Stack>
+  );
+}
+
+function TeamQueryConfigSection() {
+  const displayValueWithUnit =
+    (unit: string) => (value: any, defaultValue?: any) =>
+      value === undefined || value === defaultValue
+        ? `${defaultValue.toLocaleString()} ${unit} (System Default)`
+        : value === 0
+          ? 'Unlimited'
+          : `${value.toLocaleString()} ${unit}`;
+
+  return (
+    <Box id="team_name">
+      <Text size="md">ClickHouse Client Settings</Text>
+      <Divider my="md" />
+      <Card variant="muted">
+        <Stack>
+          <ClickhouseSettingForm
+            settingKey="searchRowLimit"
+            label="Search Row Limit"
+            tooltip="The number of rows per query for the Search page or search dashboard tiles"
+            type="number"
+            defaultValue={DEFAULT_SEARCH_ROW_LIMIT}
+            placeholder={`default = ${DEFAULT_SEARCH_ROW_LIMIT}, 0 = unlimited`}
+            min={1}
+            max={100000}
+            displayValue={displayValueWithUnit('rows')}
+          />
+          <ClickhouseSettingForm
+            settingKey="queryTimeout"
+            label="Query Timeout (seconds)"
+            tooltip="Sets the max execution time of a query in seconds."
+            type="number"
+            defaultValue={DEFAULT_QUERY_TIMEOUT}
+            placeholder={`default = ${DEFAULT_QUERY_TIMEOUT}, 0 = unlimited`}
+            min={0}
+            displayValue={displayValueWithUnit('seconds')}
+          />
+          <ClickhouseSettingForm
+            settingKey="metadataMaxRowsToRead"
+            label="Max Rows to Read (METADATA ONLY)"
+            tooltip="The maximum number of rows that can be read from a table when running a query"
+            type="number"
+            defaultValue={DEFAULT_METADATA_MAX_ROWS_TO_READ}
+            placeholder={`default = ${DEFAULT_METADATA_MAX_ROWS_TO_READ.toLocaleString()}, 0 = unlimited`}
+            min={0}
+            displayValue={displayValueWithUnit('rows')}
+          />
+          <ClickhouseSettingForm
+            settingKey="fieldMetadataDisabled"
+            label="Field Metadata Queries"
+            tooltip="Enable to fetch field metadata from ClickHouse"
+            type="boolean"
+            options={['Enabled', 'Disabled']}
+            displayValue={value => (value ? 'Disabled' : 'Enabled')}
+          />
+        </Stack>
+      </Card>
+    </Box>
+  );
+}
+
+const APIKeyCopyButton = ({
+  value,
+  dataTestId,
+}: {
+  value: string;
+  dataTestId?: string;
+}) => {
+  const [copied, setCopied] = useState(false);
+  return (
+    <CopyToClipboard text={value}>
+      <Button
+        onClick={() => setCopied(true)}
+        variant={copied ? 'light' : 'default'}
+        color="gray"
+        rightSection={
+          <div className="ms-2 text-nowrap">
+            {copied ? (
+              <i className="bi bi-check-lg me-2" />
+            ) : (
+              <i className="bi bi-clipboard-fill me-2" />
+            )}
+            {copied ? 'Copied!' : 'Copy'}
+          </div>
+        }
+      >
+        <div data-test-id={dataTestId} className="text-wrap text-break">
+          {value}
+        </div>
+      </Button>
+    </CopyToClipboard>
+  );
+};
+
+function ApiKeysSection() {
+  const { data: team, refetch: refetchTeam } = api.useTeam();
+  const { data: me, isLoading: isLoadingMe } = api.useMe();
+  const rotateTeamApiKey = api.useRotateTeamApiKey();
+  const hasAdminAccess = true;
+  const [
+    rotateApiKeyConfirmationModalShow,
+    setRotateApiKeyConfirmationModalShow,
+  ] = useState(false);
+  const rotateTeamApiKeyAction = () => {
+    rotateTeamApiKey.mutate(undefined, {
+      onSuccess: () => {
+        notifications.show({
+          color: 'green',
+          message: 'Revoked old API key and generated new key.',
+        });
+        refetchTeam();
+      },
+      onError: e => {
+        notifications.show({
+          color: 'red',
+          message: e.message,
+          autoClose: 5000,
+        });
+      },
+    });
+  };
+  const onConfirmUpdateTeamApiKey = () => {
+    rotateTeamApiKeyAction();
+    setRotateApiKeyConfirmationModalShow(false);
+  };
+
+  return (
+    <Box id="api_keys">
+      <Text size="md">API Keys</Text>
+      <Divider my="md" />
+      <Card variant="muted" mb="md">
+        <Text mb="md">Ingestion API Key</Text>
+        <Group gap="xs">
+          {team?.apiKey && (
+            <APIKeyCopyButton value={team.apiKey} dataTestId="api-key" />
+          )}
+          {hasAdminAccess && (
+            <Button
+              variant="light"
+              color="red"
+              onClick={() => setRotateApiKeyConfirmationModalShow(true)}
+            >
+              Rotate API Key
+            </Button>
+          )}
+        </Group>
+        <Modal
+          aria-labelledby="contained-modal-title-vcenter"
+          centered
+          onClose={() => setRotateApiKeyConfirmationModalShow(false)}
+          opened={rotateApiKeyConfirmationModalShow}
+          size="lg"
+          title={
+            <Text size="xl">
+              <b>Rotate API Key</b>
+            </Text>
+          }
+        >
+          <Modal.Body>
+            <Text size="md">
+              Rotating the API key will invalidate your existing API key and
+              generate a new one for you. This action is <b>not reversible</b>.
+            </Text>
+            <Group justify="end">
+              <Button
+                variant="default"
+                className="mt-2 px-4 ms-2 float-end"
+                size="sm"
+                onClick={() => setRotateApiKeyConfirmationModalShow(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="outline"
+                color="red"
+                className="mt-2 px-4 float-end"
+                size="sm"
+                onClick={onConfirmUpdateTeamApiKey}
+              >
+                Confirm
+              </Button>
+            </Group>
+          </Modal.Body>
+        </Modal>
+      </Card>
+      {!isLoadingMe && me != null && (
+        <Card variant="muted">
+          <Card.Section p="md">
+            <Text mb="md">Personal API Access Key</Text>
+            <APIKeyCopyButton value={me.accessKey} dataTestId="api-key" />
+          </Card.Section>
+        </Card>
+      )}
+    </Box>
+  );
+}
+
+export default function TeamPage() {
+  const { data: team, isLoading } = api.useTeam();
+  const hasAllowedAuthMethods =
+    team?.allowedAuthMethods != null && team?.allowedAuthMethods.length > 0;
+
+  return (
+    <div className="TeamPage">
+      <Head>
+        <title>My Team - HyperDX</title>
+      </Head>
+      <PageHeader>
+        <div>{team?.name || 'My team'}</div>
+      </PageHeader>
+      <div>
+        <Container>
+          {isLoading && (
+            <Center mt="xl">
+              <Loader color="dimmed" />
+            </Center>
+          )}
+          {!isLoading && team != null && (
+            <Stack my={20} gap="xl">
+              <SourcesSection />
+              <ConnectionsSection />
+              <IntegrationsSection />
+              <TeamNameSection />
+              <TeamQueryConfigSection />
+              <ApiKeysSection />
+
+              {hasAllowedAuthMethods && (
+                <>
+                  <h2>Security Policies</h2>
+                  {team.allowedAuthMethods != null &&
+                    team.allowedAuthMethods.length > 0 && (
+                      <div className="mb-2 text-muted">
+                        Team members can only authenticate via:{' '}
+                        <span className="text-capitalize fw-bold">
+                          {team.allowedAuthMethods.join(', ')}
+                        </span>
+                      </div>
+                    )}
+                </>
+              )}
+              <TeamMembersSection />
+            </Stack>
+          )}
+        </Container>
+      </div>
+    </div>
+  );
+}
+
+TeamPage.getLayout = withAppNav;

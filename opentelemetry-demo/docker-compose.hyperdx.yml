@@ -1,0 +1,4 @@
+services:
+  otel-collector:
+    environment:
+      - HYPERDX_API_KEY

@@ -1,0 +1,16 @@
+exporters:
+  otlp/hyperdx:
+    endpoint: "host.docker.internal:4317"
+    headers:
+      Authorization: "${env:HYPERDX_API_KEY}"
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    traces:
+      exporters: [otlp, debug, spanmetrics, otlp/hyperdx]
+    metrics:
+      exporters: [otlphttp/prometheus, debug, otlp/hyperdx]
+    logs:
+      exporters: [opensearch, debug, otlp/hyperdx]

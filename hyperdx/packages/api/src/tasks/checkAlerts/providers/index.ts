@@ -18,6 +18,7 @@ import { AggregatedAlertHistory } from '..';
 export enum AlertTaskType {
   SAVED_SEARCH,
   TILE,
+  SLO,
 }
 
 // Discriminated union of possible alert channel types with populated channel data

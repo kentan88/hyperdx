@@ -38,6 +38,7 @@ export type AlertChannel =
 export enum AlertSource {
   SAVED_SEARCH = 'saved_search',
   TILE = 'tile',
+  SLO = 'slo',
 }
 
 export interface IAlert {
@@ -62,6 +63,9 @@ export interface IAlert {
   // Tile alerts
   dashboard?: ObjectId;
   tileId?: string;
+
+  // SLO alerts
+  sloId?: string;
 
   // Silenced
   silenced?: {
@@ -137,6 +141,11 @@ const AlertSchema = new Schema<IAlert>(
       required: false,
     },
     tileId: {
+      type: String,
+      required: false,
+    },
+    // SLO alerts
+    sloId: {
       type: String,
       required: false,
     },

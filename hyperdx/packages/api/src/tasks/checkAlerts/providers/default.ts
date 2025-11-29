@@ -12,6 +12,7 @@ import AlertHistory, { IAlertHistory } from '@/models/alertHistory';
 import Connection, { IConnection } from '@/models/connection';
 import Dashboard from '@/models/dashboard';
 import { type ISavedSearch, SavedSearch } from '@/models/savedSearch';
+import SLO from '@/models/slo';
 import { type ISource, Source } from '@/models/source';
 import Webhook, { IWebhook } from '@/models/webhook';
 import {
@@ -150,6 +151,59 @@ async function getTileDetails(
   ];
 }
 
+async function getSLODetails(
+  alert: IAlert,
+): Promise<[IConnection, PartialAlertDetails] | []> {
+  const sloId = alert.sloId;
+  const slo = await SLO.findOne({
+    _id: sloId,
+    team: alert.team,
+  });
+
+  if (!slo) {
+    logger.error({
+      message: 'SLO not found',
+      sloId,
+      alertId: alert.id,
+    });
+    return [];
+  }
+
+  // Construct a synthetic connection for the system ClickHouse
+  // We use the system config since SLO measurements are stored there
+  const connection: IConnection = {
+    id: 'system-clickhouse',
+    name: 'System ClickHouse',
+    host: config.CLICKHOUSE_HOST,
+    username: config.CLICKHOUSE_USER,
+    password: config.CLICKHOUSE_PASSWORD,
+    team: alert.team,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  } as any;
+
+  return [
+    connection,
+    {
+      alert,
+      // Create a dummy source for SLO
+      source: {
+        id: 'slo-source',
+        name: 'SLO Source',
+        kind: 'log', // Using log kind as placeholder, but we query slo_measurements
+        connection: connection.id,
+        team: alert.team,
+        from: {
+          databaseName: 'default',
+          tableName: 'slo_measurements',
+        },
+      } as any,
+      taskType: AlertTaskType.SLO,
+      slo,
+    },
+  ];
+}
+
 async function loadAlert(
   alert: IAlert,
   groupedTasks: Map<string, AlertTask>,
@@ -175,6 +229,10 @@ async function loadAlert(
 
     case AlertSource.TILE:
       [conn, details] = await getTileDetails(alert);
+      break;
+
+    case AlertSource.SLO:
+      [conn, details] = await getSLODetails(alert);
       break;
 
     default:

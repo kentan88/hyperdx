@@ -302,6 +302,33 @@ const getChartConfigFromAlert = (
         seriesReturnType: tile.config.seriesReturnType,
       };
     }
+  } else if (details.taskType === AlertTaskType.SLO) {
+    const slo = details.slo;
+    const escape = (str: string) => str.replace(/'/g, "\\'");
+    return {
+      connection,
+      dateRange,
+      dateRangeStartInclusive: true,
+      dateRangeEndInclusive: false,
+      displayType: DisplayType.Line,
+      from: {
+        databaseName: 'default',
+        tableName: 'slo_measurements',
+      },
+      granularity: `${windowSizeInMins} minute`,
+      select: [
+        {
+          aggFn: 'min', // Take the minimum error budget remaining in the window
+          aggCondition: '',
+          valueExpression: 'error_budget_remaining',
+        },
+      ],
+      where: `service_name = '${escape(slo.serviceName)}' AND slo_name = '${escape(
+        slo.sloName,
+      )}'`,
+      groupBy: [],
+      timestampValueExpression: 'timestamp',
+    };
   }
 
   logger.error(

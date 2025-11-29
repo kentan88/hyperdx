@@ -468,5 +468,92 @@ const api = {
         }).json() as Promise<{ success: boolean; error?: string }>,
     });
   },
+  // SLO hooks
+  useSLOs(options?: UseQueryOptions<any, Error>) {
+    return useQuery({
+      queryKey: ['slos'],
+      queryFn: () => hdxServer('slos', { method: 'GET' }).json(),
+      ...options,
+    });
+  },
+  useSLO(sloId: string, options?: UseQueryOptions<any, Error>) {
+    return useQuery({
+      queryKey: ['slos', sloId],
+      queryFn: () => hdxServer(`slos/${sloId}`, { method: 'GET' }).json(),
+      ...options,
+    });
+  },
+  useSLOStatus(sloId: string, options?: UseQueryOptions<any, Error>) {
+    return useQuery({
+      queryKey: ['slo-status', sloId],
+      queryFn: () => hdxServer(`slos/${sloId}/status`, { method: 'GET' }).json(),
+      ...options,
+    });
+  },
+  useSLOBurnRate(
+    sloId: string,
+    timeStart: Date,
+    timeEnd: Date,
+    options?: UseQueryOptions<any, Error>,
+  ) {
+    return useQuery({
+      queryKey: ['slo-burn-rate', sloId, timeStart?.getTime(), timeEnd?.getTime()],
+      queryFn: () =>
+        hdxServer(`slos/${sloId}/burn-rate`, {
+          method: 'GET',
+          searchParams: {
+            timeStart: timeStart.toISOString(),
+            timeEnd: timeEnd.toISOString(),
+          },
+        }).json(),
+      ...options,
+    });
+  },
+  useCreateSLO() {
+    return useMutation({
+      mutationFn: async (slo: any) =>
+        hdxServer('slos', {
+          method: 'POST',
+          json: slo,
+        }).json(),
+    });
+  },
+  useUpdateSLO() {
+    return useMutation({
+      mutationFn: async ({ id, ...slo }: { id: string; [key: string]: any }) =>
+        hdxServer(`slos/${id}`, {
+          method: 'PATCH',
+          json: slo,
+        }).json(),
+    });
+  },
+  useDeleteSLO() {
+    return useMutation({
+      mutationFn: async (sloId: string) =>
+        hdxServer(`slos/${sloId}`, {
+          method: 'DELETE',
+        }),
+    });
+  },
+  useSLOBubbleUp(
+    sloId: string,
+    timeStart: Date,
+    timeEnd: Date,
+    options?: UseQueryOptions<any, Error>,
+  ) {
+    return useQuery({
+      queryKey: ['slo-bubble-up', sloId, timeStart?.getTime(), timeEnd?.getTime()],
+      queryFn: () =>
+        hdxServer(`slos/${sloId}/bubbleup`, {
+          method: 'POST',
+          json: {
+            timeStart: timeStart.toISOString(),
+            timeEnd: timeEnd.toISOString(),
+          },
+        }).json(),
+      enabled: !!sloId && !!timeStart && !!timeEnd,
+      ...options,
+    });
+  },
 };
 export default api;

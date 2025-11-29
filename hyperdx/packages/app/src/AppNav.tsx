@@ -34,6 +34,7 @@ import {
   IconSettings,
   IconSitemap,
   IconTable,
+  IconTarget,
 } from '@tabler/icons-react';
 
 import {
@@ -731,6 +732,13 @@ export default function AppNav({ fixed = false }: { fixed?: boolean }) {
                   label="Alerts"
                   href="/alerts"
                   icon={<IconBell size={16} />}
+                />
+              )}
+              {!IS_LOCAL_MODE && (
+                <AppNavLink
+                  label="SLOs"
+                  href="/slos"
+                  icon={<IconTarget size={16} />}
                 />
               )}
               <AppNavLink

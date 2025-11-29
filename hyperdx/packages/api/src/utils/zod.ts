@@ -4,6 +4,7 @@ import { Types } from 'mongoose';
 import { z } from 'zod';
 
 import { AlertSource, AlertThresholdType } from '@/models/alert';
+import { SLOMetricType } from '@/models/slo';
 
 export const objectIdSchema = z.string().refine(val => {
   return Types.ObjectId.isValid(val);
@@ -231,6 +232,11 @@ export const zTileAlert = z.object({
   dashboardId: z.string().min(1),
 });
 
+export const zSLOAlert = z.object({
+  source: z.literal(AlertSource.SLO),
+  sloId: z.string().min(1),
+});
+
 export const alertSchema = z
   .object({
     channel: zChannel,
@@ -241,4 +247,20 @@ export const alertSchema = z
     name: z.string().min(1).max(512).nullish(),
     message: z.string().min(1).max(4096).nullish(),
   })
-  .and(zSavedSearchAlert.or(zTileAlert));
+  .and(zSavedSearchAlert.or(zTileAlert).or(zSLOAlert));
+
+// ==============================
+// SLOs
+// ==============================
+export const sloSchema = z.object({
+  serviceName: z.string().min(1).max(256),
+  sloName: z.string().min(1).max(256),
+  metricType: z.nativeEnum(SLOMetricType),
+  targetValue: z.number().min(0).max(100),
+  timeWindow: z.string().min(1).max(32), // e.g., '30d', '90d'
+  numeratorQuery: z.string().optional(),
+  denominatorQuery: z.string().optional(),
+  filter: z.string().optional(),
+  goodCondition: z.string().optional(),
+  alertThreshold: z.number().min(0).max(100).optional(),
+});

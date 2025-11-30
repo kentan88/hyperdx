@@ -3,6 +3,7 @@ import Head from 'next/head';
 import Link from 'next/link';
 import {
   ActionIcon,
+  Alert,
   Badge,
   Box,
   Button,
@@ -28,6 +29,7 @@ import { notifications } from '@mantine/notifications';
 import api from './api';
 import { withAppNav } from './layout';
 import SLOStatusCard from './components/SLOStatusCard';
+import SLOBuilder from './components/SLOBuilder';
 
 function SLOCreationModal({
   opened,
@@ -42,8 +44,21 @@ function SLOCreationModal({
   const [metricType, setMetricType] = useState<string | null>('availability');
   const [mode, setMode] = useState<string>('builder');
   const [sourceTable, setSourceTable] = useState<string>('otel_logs');
+  const [generatedFilter, setGeneratedFilter] = useState('');
+  const [generatedGoodCondition, setGeneratedGoodCondition] = useState('');
 
-  const { register, handleSubmit, reset } = useForm();
+  const { register, handleSubmit, reset, setValue } = useForm();
+
+  const handleBuilderGenerate = (filter: string, goodCondition: string) => {
+    setGeneratedFilter(filter);
+    setGeneratedGoodCondition(goodCondition);
+    setValue('filter', filter);
+    setValue('goodCondition', goodCondition);
+    notifications.show({
+      color: 'green',
+      message: 'SLO conditions generated! Review and create your SLO.',
+    });
+  };
 
   const onSubmit = (data: any) => {
     // If builder mode, clear raw queries (or let backend handle precedence)
@@ -156,38 +171,29 @@ function SLOCreationModal({
 
           {mode === 'builder' ? (
             <>
-              <Textarea
-                label="Base Filter (Total Events)"
-                description={
-                  sourceTable === 'otel_traces'
-                    ? 'SQL WHERE clause defining the set of valid traces/spans'
-                    : 'SQL WHERE clause defining the set of valid events'
-                }
-                placeholder={
-                  sourceTable === 'otel_traces'
-                    ? "ServiceName = 'api' AND SpanName LIKE 'POST /checkout%'"
-                    : "ServiceName = 'api' AND Body LIKE '%request%'"
-                }
-                required={mode === 'builder'}
-                minRows={2}
-                {...register('filter', { required: mode === 'builder' })}
+              <SLOBuilder
+                metricType={metricType || 'availability'}
+                sourceTable={sourceTable}
+                onGenerate={handleBuilderGenerate}
               />
-              <Textarea
-                label="Good Event Condition"
-                description={
-                  sourceTable === 'otel_traces'
-                    ? 'SQL condition defining successful traces (e.g., StatusCode = 1 for OK, Duration < 1000 for latency)'
-                    : 'SQL condition defining successful events (e.g., SeverityNumber < 17 for non-errors)'
-                }
-                placeholder={
-                  sourceTable === 'otel_traces'
-                    ? 'StatusCode = 1 AND Duration < 1000'
-                    : 'SeverityNumber < 17'
-                }
-                required={mode === 'builder'}
-                minRows={2}
-                {...register('goodCondition', { required: mode === 'builder' })}
-              />
+              
+              {generatedFilter && generatedGoodCondition && (
+                <Alert color="green" variant="light" title="Ready to Create">
+                  <Stack gap="xs">
+                    <Text size="sm">
+                      Your SLO conditions have been generated. Review the settings below and click "Create SLO".
+                    </Text>
+                    <Group gap="xs">
+                      <Badge>Filter: {generatedFilter.substring(0, 50)}{generatedFilter.length > 50 ? '...' : ''}</Badge>
+                      <Badge>Condition: {generatedGoodCondition.substring(0, 50)}{generatedGoodCondition.length > 50 ? '...' : ''}</Badge>
+                    </Group>
+                  </Stack>
+                </Alert>
+              )}
+              
+              {/* Hidden fields to store generated values */}
+              <input type="hidden" {...register('filter')} />
+              <input type="hidden" {...register('goodCondition')} />
             </>
           ) : (
             <>

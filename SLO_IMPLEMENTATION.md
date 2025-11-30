@@ -67,15 +67,18 @@ SLO support has been added to HyperDX, allowing users to:
 
 ### Creating an SLO
 
+#### Log-Based Availability SLO
+
 ```typescript
 const createSLO = useCreateSLO();
 
 createSLO.mutate({
   serviceName: 'api-service',
-  sloName: 'availability-99.9',
+  sloName: 'log-availability-99.9',
   metricType: 'availability',
   targetValue: 99.9,
   timeWindow: '30d',
+  sourceTable: 'otel_logs',
   numeratorQuery: `
     SELECT count() as count
     FROM default.otel_logs
@@ -93,12 +96,112 @@ createSLO.mutate({
 });
 ```
 
+#### Trace-Based Latency SLO
+
+```typescript
+createSLO.mutate({
+  serviceName: 'checkout-service',
+  sloName: 'latency-p99-200ms',
+  metricType: 'latency',
+  targetValue: 99.0,
+  timeWindow: '30d',
+  sourceTable: 'otel_traces',
+  numeratorQuery: `
+    SELECT count() as count
+    FROM default.otel_traces
+    WHERE ServiceName = 'checkout-service'
+      AND SpanName LIKE 'POST /checkout%'
+      AND Duration < 200  -- Duration in milliseconds
+      AND Timestamp >= now() - INTERVAL 30 DAY
+  `,
+  denominatorQuery: `
+    SELECT count() as count
+    FROM default.otel_traces
+    WHERE ServiceName = 'checkout-service'
+      AND SpanName LIKE 'POST /checkout%'
+      AND Timestamp >= now() - INTERVAL 30 DAY
+  `,
+  alertThreshold: 80,
+});
+```
+
+#### Trace-Based Availability SLO (Error Rate)
+
+```typescript
+createSLO.mutate({
+  serviceName: 'api-service',
+  sloName: 'trace-availability-99.5',
+  metricType: 'availability',
+  targetValue: 99.5,
+  timeWindow: '30d',
+  sourceTable: 'otel_traces',
+  numeratorQuery: `
+    SELECT count() as count
+    FROM default.otel_traces
+    WHERE ServiceName = 'api-service'
+      AND StatusCode = 1  -- 1 = OK in OpenTelemetry
+      AND Timestamp >= now() - INTERVAL 30 DAY
+  `,
+  denominatorQuery: `
+    SELECT count() as count
+    FROM default.otel_traces
+    WHERE ServiceName = 'api-service'
+      AND Timestamp >= now() - INTERVAL 30 DAY
+  `,
+  alertThreshold: 80,
+});
+```
+
+#### Builder Mode Examples
+
+**Logs (Error Rate)**:
+```typescript
+{
+  sourceTable: 'otel_logs',
+  filter: "ServiceName = 'api'",
+  goodCondition: "SeverityNumber < 17",  // Non-error logs
+}
+```
+
+**Traces (Latency)**:
+```typescript
+{
+  sourceTable: 'otel_traces',
+  filter: "ServiceName = 'checkout' AND SpanName LIKE 'POST /api/%'",
+  goodCondition: "StatusCode = 1 AND Duration < 1000",  // Success with <1s latency
+}
+```
+
+### Choosing Between Logs and Traces
+
+**Use `otel_logs` when:**
+- Measuring error rates based on log severity
+- Tracking application-level events or incidents
+- Working with services that primarily emit logs
+
+**Use `otel_traces` when:**
+- Measuring request latency (using `Duration` field)
+- Tracking request success/failure rates (using `StatusCode`)
+- Monitoring distributed transactions across services
+- Measuring user-facing API reliability
+
+**Key Field Differences:**
+
+| Field | Logs | Traces |
+|-------|------|--------|
+| Severity | `SeverityNumber`, `SeverityText` | N/A |
+| Success/Failure | `SeverityNumber < 17` | `StatusCode = 1` (OK) or `StatusCode = 2` (ERROR) |
+| Latency | Not directly available | `Duration` (milliseconds) |
+| Operation Name | `Body` or custom attributes | `SpanName` |
+| Attributes | `LogAttributes` | `SpanAttributes` |
+
 ### Query Requirements
 
 Both `numeratorQuery` and `denominatorQuery` must:
 - Return a single row with a `count` column
 - Be valid ClickHouse SELECT queries
 - Not include time filters (they are applied automatically based on `timeWindow`)
+- Use the correct `sourceTable` specified in the SLO configuration
 
 ### Status Calculation
 

@@ -15,6 +15,11 @@ export enum SLOStatus {
   BREACHED = 'breached',
 }
 
+export enum SLOSourceTable {
+  LOGS = 'otel_logs',
+  TRACES = 'otel_traces',
+}
+
 export interface ISLO {
   id: string;
   serviceName: string;
@@ -22,6 +27,7 @@ export interface ISLO {
   metricType: SLOMetricType;
   targetValue: number; // 95.0 for 95%
   timeWindow: string; // '30d', '90d', etc
+  sourceTable: SLOSourceTable; // Data source: otel_logs or otel_traces
   numeratorQuery?: string; // ClickHouse query for success count
   denominatorQuery?: string; // ClickHouse query for total count
   // Structured SLI definition for BubbleUp support
@@ -59,6 +65,12 @@ const SLOSchema = new Schema<ISLO>(
     timeWindow: {
       type: String,
       required: true,
+    },
+    sourceTable: {
+      type: String,
+      enum: Object.values(SLOSourceTable),
+      required: true,
+      default: SLOSourceTable.LOGS, // Default to logs for backward compatibility
     },
     numeratorQuery: {
       type: String,

@@ -4,7 +4,7 @@ import ms from 'ms';
 
 import * as config from '@/config';
 import type { ObjectId } from '@/models';
-import SLO, { ISLO, SLOMetricType } from '@/models/slo';
+import SLO, { ISLO, SLOMetricType, SLOSourceTable } from '@/models/slo';
 import logger from '@/utils/logger';
 
 export type SLOInput = {
@@ -13,6 +13,7 @@ export type SLOInput = {
   metricType: SLOMetricType;
   targetValue: number;
   timeWindow: string;
+  sourceTable: SLOSourceTable;
   numeratorQuery?: string;
   denominatorQuery?: string;
   filter?: string;
@@ -52,9 +53,13 @@ async function backfillSLOAggregates(slo: ISLO): Promise<void> {
   // NOTE: This backfill query is "heavy" as it scans the full window. 
   // Ideally we would chunk this, but for simplicity we run it once.
   
-  // Construct queries with time range
-  const numQuery = injectTimeFilter(slo.numeratorQuery, startTime, endTime);
-  const denQuery = injectTimeFilter(slo.denominatorQuery, startTime, endTime);
+  // Construct queries with time range (only used for Raw SQL mode)
+  const numQuery = slo.numeratorQuery
+    ? injectTimeFilter(slo.numeratorQuery, startTime, endTime)
+    : '';
+  const denQuery = slo.denominatorQuery
+    ? injectTimeFilter(slo.denominatorQuery, startTime, endTime)
+    : '';
 
   // We need to group by minute. 
   // Since we can't easily rewrite the user's RAW query to add GROUP BY if it's complex,
@@ -78,7 +83,7 @@ async function backfillSLOAggregates(slo: ISLO): Promise<void> {
         toStartOfMinute(Timestamp) as timestamp,
         countIf(${slo.goodCondition}) as numerator_count,
         count() as denominator_count
-      FROM default.otel_logs
+      FROM default.${slo.sourceTable}
       WHERE ${slo.filter} AND Timestamp >= '${startTime.toISOString().slice(0, 19).replace('T', ' ')}'
       GROUP BY timestamp
     `;
@@ -136,8 +141,8 @@ export async function createSLO(
 ): Promise<ISLO> {
   // Generate queries if structured input is provided
   if (sloInput.filter && sloInput.goodCondition) {
-    sloInput.denominatorQuery = `SELECT count() as count FROM default.otel_logs WHERE ${sloInput.filter}`;
-    sloInput.numeratorQuery = `SELECT count() as count FROM default.otel_logs WHERE ${sloInput.filter} AND (${sloInput.goodCondition})`;
+    sloInput.denominatorQuery = `SELECT count() as count FROM default.${sloInput.sourceTable} WHERE ${sloInput.filter}`;
+    sloInput.numeratorQuery = `SELECT count() as count FROM default.${sloInput.sourceTable} WHERE ${sloInput.filter} AND (${sloInput.goodCondition})`;
   }
 
   if (!sloInput.numeratorQuery || !sloInput.denominatorQuery) {
@@ -195,6 +200,7 @@ export async function createSLO(
           metric_type: sloInput.metricType,
           target_value: sloInput.targetValue,
           time_window: sloInput.timeWindow,
+          source_table: sloInput.sourceTable,
           numerator_query: sloInput.numeratorQuery,
           denominator_query: sloInput.denominatorQuery,
           alert_threshold: sloInput.alertThreshold || null,
@@ -239,15 +245,17 @@ export async function updateSLO(
 
   // If queries are being updated, validate them
   if (updates.filter && updates.goodCondition) {
-    updates.denominatorQuery = `SELECT count() as count FROM default.otel_logs WHERE ${updates.filter}`;
-    updates.numeratorQuery = `SELECT count() as count FROM default.otel_logs WHERE ${updates.filter} AND (${updates.goodCondition})`;
+    const sourceTable = updates.sourceTable || slo.sourceTable;
+    updates.denominatorQuery = `SELECT count() as count FROM default.${sourceTable} WHERE ${updates.filter}`;
+    updates.numeratorQuery = `SELECT count() as count FROM default.${sourceTable} WHERE ${updates.filter} AND (${updates.goodCondition})`;
   }
 
   if (updates.numeratorQuery || updates.denominatorQuery) {
-    await validateClickHouseQueries(
-      updates.numeratorQuery || slo.numeratorQuery,
-      updates.denominatorQuery || slo.denominatorQuery,
-    );
+    const numQuery = updates.numeratorQuery || slo.numeratorQuery || '';
+    const denQuery = updates.denominatorQuery || slo.denominatorQuery || '';
+    if (numQuery && denQuery) {
+      await validateClickHouseQueries(numQuery, denQuery);
+    }
   }
 
   // Check for duplicate if serviceName or sloName is being updated
@@ -272,10 +280,10 @@ export async function updateSLO(
     { new: true },
   );
 
-  // If queries changed, trigger backfill?
+  // If queries or source table changed, trigger backfill?
   // We should probably clear old aggregates and re-backfill if the definition changed significantly.
   // For simplicity, we'll just let it drift or maybe backfill if queries changed.
-  if (updatedSLO && (updates.numeratorQuery || updates.denominatorQuery || updates.filter)) {
+  if (updatedSLO && (updates.numeratorQuery || updates.denominatorQuery || updates.filter || updates.sourceTable)) {
     // Clear old aggregates for this SLO
     try {
       const client = createNativeClient({
@@ -325,6 +333,7 @@ export async function updateSLO(
             metric_type: updatedSLO.metricType,
             target_value: updatedSLO.targetValue,
             time_window: updatedSLO.timeWindow,
+            source_table: updatedSLO.sourceTable,
             numerator_query: updatedSLO.numeratorQuery,
             denominator_query: updatedSLO.denominatorQuery,
             alert_threshold: updatedSLO.alertThreshold || null,
@@ -417,12 +426,16 @@ export async function getSLOBubbleUp(
   const baseFilter = `${slo.filter} AND Timestamp >= '${startTimeStr}' AND Timestamp <= '${endTimeStr}'`;
   const badFilter = `${baseFilter} AND NOT (${slo.goodCondition})`;
 
+  // Determine attribute map name based on source table
+  const isTraces = slo.sourceTable === SLOSourceTable.TRACES;
+  const attributesMap = isTraces ? 'SpanAttributes' : 'LogAttributes';
+
   // 2. Find top attributes in bad set
   const topAttributesQuery = `
     SELECT
-      arrayJoin(mapKeys(LogAttributes)) as key,
+      arrayJoin(mapKeys(${attributesMap})) as key,
       count() as count
-    FROM default.otel_logs
+    FROM default.${slo.sourceTable}
     WHERE ${badFilter}
     GROUP BY key
     ORDER BY count DESC
@@ -444,25 +457,41 @@ export async function getSLOBubbleUp(
     // Fallback to empty keys if query fails (e.g. syntax error in filter)
   }
 
-  const candidateKeys = [
-    'ServiceName',
-    'SeverityText',
-    ...topKeys,
-  ];
+  // Different candidate keys based on source table
+  const candidateKeys = isTraces
+    ? ['ServiceName', 'SpanName', 'StatusCode', ...topKeys]
+    : ['ServiceName', 'SeverityText', ...topKeys];
 
   const uniqueKeys = Array.from(new Set(candidateKeys));
-  const results = [];
+  const results: Array<{
+    attribute: string;
+    values: Array<{
+      value: string;
+      badCount: number;
+      goodCount: number;
+    }>;
+  }> = [];
 
   for (const key of uniqueKeys) {
     let keyExpr = '';
     let whereClause = '';
 
-    if (key === 'ServiceName' || key === 'SeverityText') {
+    // Standard columns that exist in both tables
+    const standardColumns = ['ServiceName'];
+    // Table-specific columns
+    const logsColumns = ['SeverityText', 'SeverityNumber'];
+    const tracesColumns = ['SpanName', 'StatusCode', 'Duration'];
+
+    if (
+      standardColumns.includes(key) ||
+      (isTraces && tracesColumns.includes(key)) ||
+      (!isTraces && logsColumns.includes(key))
+    ) {
       keyExpr = key;
-      whereClause = baseFilter; // These columns always exist
+      whereClause = baseFilter; // These columns exist in the table
     } else {
-      keyExpr = `LogAttributes['${key}']`;
-      whereClause = `${baseFilter} AND mapContains(LogAttributes, '${key}')`;
+      keyExpr = `${attributesMap}['${key}']`;
+      whereClause = `${baseFilter} AND mapContains(${attributesMap}, '${key}')`;
     }
 
     const query = `
@@ -470,7 +499,7 @@ export async function getSLOBubbleUp(
         ${keyExpr} as value,
         countIf(NOT (${slo.goodCondition})) as bad_count,
         countIf(${slo.goodCondition}) as good_count
-      FROM default.otel_logs
+      FROM default.${slo.sourceTable}
       WHERE ${whereClause}
       GROUP BY value
       HAVING bad_count > 0

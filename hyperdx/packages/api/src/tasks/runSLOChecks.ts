@@ -65,7 +65,7 @@ export default class RunSLOChecksTask implements HdxTask<CheckSLOsTaskArgs> {
                       toStartOfMinute(Timestamp) as timestamp,
                       countIf(${slo.goodCondition}) as numerator_count,
                       count() as denominator_count
-                  FROM default.otel_logs
+                  FROM default.${slo.sourceTable}
                   WHERE ${slo.filter} 
                     AND Timestamp >= '${startTime.toISOString().slice(0, 19).replace('T', ' ')}'
                     AND Timestamp < '${endTime.toISOString().slice(0, 19).replace('T', ' ')}'

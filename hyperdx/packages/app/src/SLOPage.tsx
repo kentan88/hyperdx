@@ -41,6 +41,7 @@ function SLOCreationModal({
   const createSLO = api.useCreateSLO();
   const [metricType, setMetricType] = useState<string | null>('availability');
   const [mode, setMode] = useState<string>('builder');
+  const [sourceTable, setSourceTable] = useState<string>('otel_logs');
 
   const { register, handleSubmit, reset } = useForm();
 
@@ -49,6 +50,7 @@ function SLOCreationModal({
     const payload = {
       ...data,
       metricType,
+      sourceTable,
       targetValue: parseFloat(data.targetValue),
       alertThreshold: data.alertThreshold
         ? parseFloat(data.alertThreshold)
@@ -129,6 +131,17 @@ function SLOCreationModal({
             required
             {...register('timeWindow', { required: true })}
           />
+          <Select
+            label="Data Source"
+            description="Choose whether to measure SLO against logs or traces"
+            data={[
+              { value: 'otel_logs', label: 'Logs (for error rates, log-based availability)' },
+              { value: 'otel_traces', label: 'Traces (for request latency, span-based availability)' },
+            ]}
+            value={sourceTable}
+            onChange={(value) => setSourceTable(value || 'otel_logs')}
+            required
+          />
 
           <Divider label="SLI Definition" labelPosition="center" />
           
@@ -145,16 +158,32 @@ function SLOCreationModal({
             <>
               <Textarea
                 label="Base Filter (Total Events)"
-                description="SQL WHERE clause defining the set of valid events"
-                placeholder="ServiceName = 'api' AND Body LIKE '%request%'"
+                description={
+                  sourceTable === 'otel_traces'
+                    ? 'SQL WHERE clause defining the set of valid traces/spans'
+                    : 'SQL WHERE clause defining the set of valid events'
+                }
+                placeholder={
+                  sourceTable === 'otel_traces'
+                    ? "ServiceName = 'api' AND SpanName LIKE 'POST /checkout%'"
+                    : "ServiceName = 'api' AND Body LIKE '%request%'"
+                }
                 required={mode === 'builder'}
                 minRows={2}
                 {...register('filter', { required: mode === 'builder' })}
               />
               <Textarea
                 label="Good Event Condition"
-                description="SQL condition that defines a successful event (appended to Base Filter)"
-                placeholder="SeverityNumber < 17" // e.g. Info or lower
+                description={
+                  sourceTable === 'otel_traces'
+                    ? 'SQL condition defining successful traces (e.g., StatusCode = 1 for OK, Duration < 1000 for latency)'
+                    : 'SQL condition defining successful events (e.g., SeverityNumber < 17 for non-errors)'
+                }
+                placeholder={
+                  sourceTable === 'otel_traces'
+                    ? 'StatusCode = 1 AND Duration < 1000'
+                    : 'SeverityNumber < 17'
+                }
                 required={mode === 'builder'}
                 minRows={2}
                 {...register('goodCondition', { required: mode === 'builder' })}
@@ -165,7 +194,7 @@ function SLOCreationModal({
               <Textarea
                 label="Numerator Query"
                 description="ClickHouse query returning 'count' column for successful events"
-                placeholder="SELECT count() as count FROM default.otel_logs WHERE ..."
+                placeholder={`SELECT count() as count FROM default.${sourceTable} WHERE ...`}
                 required={mode === 'sql'}
                 minRows={3}
                 {...register('numeratorQuery', { required: mode === 'sql' })}
@@ -173,7 +202,7 @@ function SLOCreationModal({
               <Textarea
                 label="Denominator Query"
                 description="ClickHouse query returning 'count' column for total events"
-                placeholder="SELECT count() as count FROM default.otel_logs WHERE ..."
+                placeholder={`SELECT count() as count FROM default.${sourceTable} WHERE ...`}
                 required={mode === 'sql'}
                 minRows={3}
                 {...register('denominatorQuery', { required: mode === 'sql' })}

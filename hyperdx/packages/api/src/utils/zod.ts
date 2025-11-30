@@ -4,7 +4,7 @@ import { Types } from 'mongoose';
 import { z } from 'zod';
 
 import { AlertSource, AlertThresholdType } from '@/models/alert';
-import { SLOMetricType } from '@/models/slo';
+import { SLOMetricType, SLOSourceTable } from '@/models/slo';
 
 export const objectIdSchema = z.string().refine(val => {
   return Types.ObjectId.isValid(val);
@@ -258,6 +258,7 @@ export const sloSchema = z.object({
   metricType: z.nativeEnum(SLOMetricType),
   targetValue: z.number().min(0).max(100),
   timeWindow: z.string().min(1).max(32), // e.g., '30d', '90d'
+  sourceTable: z.nativeEnum(SLOSourceTable),
   numeratorQuery: z.string().optional(),
   denominatorQuery: z.string().optional(),
   filter: z.string().optional(),
